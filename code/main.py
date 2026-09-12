@@ -1,4 +1,4 @@
-﻿"""
+"""
 code/main.py — FinSight Entry Point
 
 Async orchestrator: processes all 251 requests individually using
@@ -97,10 +97,14 @@ def main():
     for img in loader.get_image_records():
         imgs_by_u.setdefault(img.user_id, []).append(img)
 
+    all_eval_requests = loader.get_requests()
+    all_sample_requests = loader.get_sample_requests()
+    all_known_requests = all_eval_requests + all_sample_requests  # both sets for payment option mapping
+
     contexts = build_user_contexts(
         loader.get_profiles(), loader.get_events_by_user(),
         loader.get_messages_by_user(), imgs_by_u,
-        loader.get_payment_options_by_request(), loader.get_requests(), norm
+        loader.get_payment_options_by_request(), all_known_requests, norm
     )
     contexts = apply_all_patches(contexts)
     logger.info("Loaded %d user contexts (with patches)", len(contexts))
@@ -114,20 +118,19 @@ def main():
     logger.info("Loaded %d message patches", len(msg_patches))
 
     # ── Select requests ───────────────────────────────────────
-    all_requests = loader.get_requests()
     if args.sample:
-        import pandas as pd
-        sample_ids = set(pd.read_csv(DATASET / "sample_requests.csv")["request_id"].tolist())
-        requests_to_process = [r for r in all_requests if r.request_id in sample_ids]
+        # sample_requests.csv has its own rows (request_01..request_25),
+        # NOT present in requests.csv — load them directly.
+        requests_to_process = all_sample_requests
         logger.info("Running %d sample requests", len(requests_to_process))
     elif args.request:
-        requests_to_process = [r for r in all_requests if r.request_id == args.request]
+        requests_to_process = [r for r in all_known_requests if r.request_id == args.request]
         if not requests_to_process:
-            logger.error("request_id %s not found", args.request)
+            logger.error("request_id %s not found in eval or sample requests", args.request)
             sys.exit(1)
     else:
-        requests_to_process = all_requests
-        logger.info("Running all %d requests", len(requests_to_process))
+        requests_to_process = all_eval_requests
+        logger.info("Running all %d evaluation requests", len(requests_to_process))
 
     # ── Run async ─────────────────────────────────────────────
     results = asyncio.run(run(requests_to_process, contexts, msg_patches))

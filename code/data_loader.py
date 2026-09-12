@@ -1,4 +1,4 @@
-﻿"""
+"""
 data_loader.py – Load and validate all dataset CSVs into typed Pydantic models.
 
 Each get_*() method returns a clean Python list of the corresponding model.
@@ -113,6 +113,24 @@ class DataLoader:
 
     def get_requests_map(self) -> Dict[str, PurchaseRequest]:
         return {req.request_id: req for req in self.get_requests()}
+
+    def get_sample_requests(self) -> List[PurchaseRequest]:
+        """Load from sample_requests.csv (request_01..25) — separate from requests.csv."""
+        sample_path = self.base / "sample_requests.csv"
+        df = pd.read_csv(sample_path)
+        rows = []
+        for _, r in df.iterrows():
+            rows.append(PurchaseRequest(
+                request_id=str(r["request_id"]),
+                user_id=str(r["user_id"]),
+                request_date=str(r["request_date"]),
+                request_type=str(r["request_type"]),
+                requested_amount=float(r["requested_amount"]),
+                desired_completion_date=_opt_str(r.get("desired_completion_date")),
+                allows_partial_payment=bool(str(r.get("allows_partial_payment", "false")).strip().lower() == "true"),
+                request_text=str(r.get("request_text", "")),
+            ))
+        return rows
 
     def get_payment_options(self) -> List[PaymentOption]:
         rows = []
