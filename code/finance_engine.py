@@ -15,6 +15,7 @@ Design rules (from AGENTS.md §6.3):
 """
 from __future__ import annotations
 
+import calendar
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -76,8 +77,14 @@ class RecurrenceDetector:
         self,
         events: List[FinancialEvent],
         as_of: date,
+        salary_override: Optional[dict] = None,
     ) -> List[RecurringPattern]:
-        """Return list of detected recurring patterns as of `as_of` date."""
+        """Return list of detected recurring patterns as of `as_of` date.
+
+        `salary_override` (when present) is the authoritative go-forward pay from a
+        payroll message patch: {"amount": float, "first_date": date | None}. It wins
+        over history-derived salary projection (a raise/reduction/new job).
+        """
         cutoff = as_of - timedelta(days=self.MAX_LOOKBACK_DAYS)
 
         settled = [
@@ -183,8 +190,14 @@ class RecurrenceDetector:
             # (e.g., >10% diff), assume a structural change (like a salary increase) 
             # and use the most recent amount for future projections instead.
             latest_amount = evs_sorted[-1].amount
-            if abs(latest_amount - avg_amount) > (0.10 * avg_amount) and len(amounts) >= 2:
-                # E.g. last 4 were 10,000, last 1 is 15,000 (salary increase patch)
+            if (
+                is_salary
+                and abs(latest_amount - avg_amount) > (0.10 * avg_amount)
+                and len(amounts) >= 2
+            ):
+                # Structural pay change (raise/reduction) — salary/income only.
+                # Variable expenses keep the trimmed mean so a one-off spike
+                # (e.g. a bulk grocery run) is not baked in as the recurring amount.
                 avg_amount = latest_amount
             # last_date = most recent known occurrence (settled or scheduled)
             if has_scheduled_confirm:
@@ -209,6 +222,59 @@ class RecurrenceDetector:
             ))
             seen_keys.add(key)
 
+        # A payroll-message salary override is authoritative: it replaces the
+        # history-derived salary projection (fixes silently-dropped overrides).
+        if salary_override and salary_override.get("amount"):
+            patterns = self._apply_salary_override(patterns, salary_override, as_of)
+
+        return patterns
+
+    def _apply_salary_override(
+        self,
+        patterns: List[RecurringPattern],
+        override: dict,
+        as_of: date,
+    ) -> List[RecurringPattern]:
+        """
+        Fold an authoritative salary override into the detected patterns.
+
+        - Set the primary salary/income credit pattern's amount to the override.
+        - Force a monthly cadence when the detected period is implausible for pay
+          (e.g. gig income merged into 10.7d, or a sparse 91d gap).
+        - Anchor the first occurrence to the patched effective date when given.
+        - Drop secondary salary/income patterns (the override is the total pay).
+        - Synthesize a monthly pattern when history had none (e.g. a first salary).
+        """
+        amount = float(override["amount"])
+        first_date = override.get("first_date")
+
+        sal_pats = [
+            p for p in patterns
+            if p.direction == "credit" and p.category in self.SALARY_CATEGORIES
+        ]
+
+        if sal_pats:
+            primary = max(sal_pats, key=lambda p: p.avg_amount)
+            primary.avg_amount = amount
+            if primary.avg_period_days < 20 or primary.avg_period_days > 45:
+                primary.avg_period_days = 30.0
+            if first_date:
+                primary.last_date = first_date
+            for p in sal_pats:
+                if p is not primary:
+                    patterns.remove(p)
+        else:
+            anchor = first_date if first_date else (as_of + timedelta(days=30))
+            patterns.append(RecurringPattern(
+                key="salary:credit",
+                avg_amount=amount,
+                avg_period_days=30.0,
+                last_date=anchor,
+                direction="credit",
+                category="salary",
+                flexibility="essential",
+                event_ids=[],
+            ))
         return patterns
 
 
@@ -276,7 +342,7 @@ class DailyBalanceSimulator:
             # Next occurrence after request_date
             next_occ = pat.last_date
             while next_occ <= request_date:
-                next_occ += timedelta(days=round(pat.avg_period_days))
+                next_occ = _step_recurring(next_occ, pat.avg_period_days)
 
             while next_occ <= end_date:
                 # Don't double-count if a concrete event exists on same day for same category
@@ -289,7 +355,7 @@ class DailyBalanceSimulator:
                     concrete_c = future_credits.get(next_occ, [])
                     if not any(e.category == pat.category for e in concrete_c):
                         proj_credits[next_occ] += pat.avg_amount
-                next_occ += timedelta(days=round(pat.avg_period_days))
+                next_occ = _step_recurring(next_occ, pat.avg_period_days)
 
         # Simulate day by day
         for day_offset in range(self.HORIZON_DAYS + 1):
@@ -364,7 +430,11 @@ class AffordabilityCalculator:
         requested_amount: float,
     ) -> "AffordabilityResult":
         min_bal = ctx.profile.minimum_balance_to_keep
-        patterns = self.detector.detect(ctx.events, as_of=request_date)
+        patterns = self.detector.detect(
+            ctx.events,
+            as_of=request_date,
+            salary_override=getattr(ctx, "salary_override", None),
+        )
 
         # Baseline 90-day projection (no payment)
         baseline = self.simulator.simulate(ctx, request_date, patterns)
@@ -490,6 +560,29 @@ def _parse_date(date_str: Optional[str]) -> date:
         return date.fromisoformat(str(date_str)[:10])
     except ValueError:
         return date.today()
+
+
+def _step_recurring(d: date, period_days: float) -> date:
+    """
+    Advance a recurring occurrence by one period.
+
+    Monthly-ish patterns (26-35 days) step by *calendar month* so the day-of-month
+    payday is preserved (a salary on the 15th stays on the 15th). This removes the
+    round(30.4)->30 accumulation drift that pushed earliest_date off by 1-3 days.
+    Weekly / bi-weekly / other patterns step by whole days as before.
+    """
+    p = round(period_days)
+    if 26 <= p <= 35:
+        return _add_one_calendar_month(d)
+    return d + timedelta(days=p)
+
+
+def _add_one_calendar_month(d: date) -> date:
+    """Add one calendar month, clamping the day to the target month's last day."""
+    year = d.year + (1 if d.month == 12 else 0)
+    month = 1 if d.month == 12 else d.month + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
 
 
 def _stddev(values: List[float]) -> float:

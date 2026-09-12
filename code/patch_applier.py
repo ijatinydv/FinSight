@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -71,6 +72,7 @@ def apply_all_patches(contexts: Dict[str, UserContext]) -> Dict[str, UserContext
                 new_events = _cancel_future_salary(new_events)
 
         new_events = _apply_image_patches(new_events, img_by_event)
+        sal_override = _extract_salary_override(uid, msg_patches, ctx.profile, ctx.normalizer)
         patched[uid] = UserContext(
             profile=ctx.profile,
             events=new_events,
@@ -78,6 +80,7 @@ def apply_all_patches(contexts: Dict[str, UserContext]) -> Dict[str, UserContext
             images=ctx.images,
             payment_options=ctx.payment_options,
             normalizer=ctx.normalizer,
+            salary_override=sal_override,
         )
 
     # Log summary
@@ -271,6 +274,59 @@ def _apply_image_patches(
 # ─────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────
+
+def _parse_patch_date(s: Optional[str]) -> Optional[date]:
+    """Parse a 'YYYY-MM-DD' (or ISO datetime) patch date into a date object."""
+    if not s:
+        return None
+    try:
+        return datetime.strptime(str(s)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _extract_salary_override(
+    user_id: str,
+    all_patches: dict,
+    profile,
+    normalizer,
+) -> Optional[dict]:
+    """
+    Find the authoritative salary_override patch for this user and return
+    {"amount": <home-currency float>, "first_date": <date | None>}, or None.
+
+    The patch amount is the ground-truth go-forward pay. It is normalised to the
+    user's home currency so the deterministic engine (which works in home currency)
+    can apply it directly. `first_date` is the patched effective/credit date when
+    the message stated one (None means "keep the historical payday cadence").
+    """
+    patch = None
+    for v in all_patches.values():
+        if (
+            v.get("user_id") == user_id
+            and v.get("patch_type") == "salary_override"
+            and v.get("new_amount") is not None
+            and float(v.get("new_amount") or 0) > 0
+        ):
+            patch = v
+            break  # one authoritative salary per user
+    if patch is None:
+        return None
+
+    amount = float(patch["new_amount"])
+    currency = patch.get("currency")
+    home = getattr(profile, "home_currency", None)
+    first_date = _parse_patch_date(patch.get("new_date"))
+
+    if currency and home and currency != home:
+        ref = first_date or date.today()
+        try:
+            amount = normalizer.convert(amount, currency, home, ref)
+        except Exception as e:  # pragma: no cover - keep original on failure
+            logger.warning("Salary override FX failed for %s: %s", user_id, e)
+
+    return {"amount": amount, "first_date": first_date}
+
 
 def _load_json(path: Path) -> dict:
     if not path.exists():

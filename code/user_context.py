@@ -37,6 +37,9 @@ class UserContext:
     images: List[ImageRecord]
     payment_options: Dict[str, List[PaymentOption]]  # request_id -> options
     normalizer: ExchangeNormalizer        # shared across all users
+    # Authoritative go-forward salary from a payroll message patch.
+    # {"amount": float (home currency), "first_date": date | None}. None when no override.
+    salary_override: Optional[dict] = None
 
     # ---------------------------------------------------------
     # Convenience: events split by status
