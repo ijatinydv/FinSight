@@ -24,10 +24,11 @@ from ..finance_engine import (
     RecurrenceDetector,
 )
 from ..schemas import OutputRow, PaymentOption, PurchaseRequest
+from ..spending_optimizer import SpendingOptimizer
 from ..user_context import UserContext
 from .critic_agent import RiskCritic
 from .explainer_agent import ExplainerAgent
-from .strategy_agent import AgentDecisionSchema, StrategyAgent, _enforce_status_method
+from .strategy_agent import AgentDecisionSchema, PaymentInstallmentSchema, StrategyAgent, _enforce_status_method
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class ReflexionLoop:
         self.detector  = RecurrenceDetector()
         self.simulator = DailyBalanceSimulator()
         self.calc      = AffordabilityCalculator(self.simulator, self.detector)
+        self.optimizer = SpendingOptimizer(self.simulator)
         self.actor     = StrategyAgent()
         self.critic    = RiskCritic(self.simulator)
         self.explainer = ExplainerAgent()
@@ -76,10 +78,31 @@ class ReflexionLoop:
             desired_completion_date=dcd,
         )
 
-        # 2. Build message context string
-        msg_context = _build_message_context(request, ctx, msg_patches)
+        # 2. Proactive spending-change optimizer
+        #    Ask: "would stopping/reducing flexible expenses unlock the full payment?"
+        spending_changes_hint: list = []
+        spending_changes_sufficient = False
+        req_amt = float(request.requested_amount)
+        user_methods = set(m.strip().lower() for m in ctx.profile.payment_methods)
+        can_full = "full_payment" in user_methods
 
-        # 3. Actor-Critic reflexion loop
+        if can_full and not affordability.can_pay_now:
+            spending_changes_hint, spending_changes_sufficient = self.optimizer.find_changes(
+                ctx, req_date, req_amt, affordability.recurring_patterns
+            )
+            if spending_changes_hint:
+                logger.info(
+                    "[%s] SpendingOptimizer found %d change(s): %s",
+                    request.request_id, len(spending_changes_hint), spending_changes_hint
+                )
+
+        # 3. Build message context string (include spending hint for LLM)
+        msg_context = _build_message_context(request, ctx, msg_patches)
+        if spending_changes_hint:
+            hint_str = " | ".join(spending_changes_hint)
+            msg_context = f"[SPENDING_CHANGES_HINT]: {hint_str}\n" + msg_context
+
+        # 4. Actor-Critic reflexion loop
         trace_iterations = []
         decision: Optional[AgentDecisionSchema] = None
         critic_feedback: Optional[str] = None
@@ -119,14 +142,42 @@ class ReflexionLoop:
                     decision = self.actor._deterministic_fallback(request, ctx, affordability, eligible_options)
                     trace_iterations.append({"iter": "FALLBACK", "reason": feedback[:120]})
 
-        # 4. Explainer
+        # 5. Post-validation: if LLM missed spending changes but optimizer found them,
+        #    and the current decision is not_recommended/not_affordable or missed changes,
+        #    inject the spending-change plan directly (deterministic override).
+        if spending_changes_sufficient and spending_changes_hint:
+            current_method = decision.recommended_payment_method
+            current_changes = decision.spending_changes_needed or []
+            # If LLM chose not_recommended or didn't include the changes
+            if current_method in ("not_recommended", "wait") or not current_changes:
+                req_date_str = str(request.request_date)
+                decision = AgentDecisionSchema(
+                    amount_safe_to_pay=affordability.amount_safe_to_pay,
+                    affordability_status="affordable_with_plan",
+                    recommended_payment_method="full_payment",
+                    payment_plan=[PaymentInstallmentSchema(date=req_date_str, amount=req_amt)],
+                    earliest_date_for_full_payment=req_date_str,
+                    spending_changes_needed=spending_changes_hint,
+                    decision_explanation="",  # will be filled by Explainer
+                    internal_reasoning="SpendingOptimizer unlocked full payment via spending changes.",
+                )
+                trace_iterations.append({
+                    "iter": "SPENDING_OVERRIDE",
+                    "result": f"Injected spending changes: {spending_changes_hint}",
+                })
+                logger.info(
+                    "[%s] Spending-change override applied: %s",
+                    request.request_id, spending_changes_hint
+                )
+
+        # 6. Explainer
         explanation = self.explainer.explain(request, ctx, decision)
         decision.decision_explanation = explanation
 
-        # 5. Build OutputRow
+        # 7. Build OutputRow
         row = _build_output_row(request, ctx, affordability, decision)
 
-        # 6. Build trace log
+        # 8. Build trace log
         elapsed = time.time() - t_start
         trace = _build_trace(request, ctx, affordability, decision, trace_iterations, elapsed)
 
@@ -203,6 +254,26 @@ def _build_output_row(
         except AttributeError:
             pass
 
+    # Ensure earliest_date_for_full_payment follows spec rules:
+    # - not_recommended → MUST be empty (no safe full payment in forecast period)
+    # - affordable_now  → MUST equal request_date
+    # - affordable_later → MUST use the deterministic engine's earliest date
+    # - affordable_with_plan → populate from engine if LLM missed it
+    earliest = decision.earliest_date_for_full_payment or ""
+    method = decision.recommended_payment_method
+    status = decision.affordability_status
+
+    if method == "not_recommended" or status == "not_affordable":
+        earliest = ""
+    elif status == "affordable_now":
+        earliest = str(request.request_date)
+    elif status == "affordable_later":
+        # Use engine's value — it's the authoritative earliest safe date
+        if affordability.earliest_date_for_full_payment:
+            earliest = str(affordability.earliest_date_for_full_payment)
+    elif not earliest and affordability.earliest_date_for_full_payment:
+        earliest = str(affordability.earliest_date_for_full_payment)
+
     plan_str = _format_payment_plan(decision.payment_plan)
     changes_str = _format_spending_changes(decision.spending_changes_needed)
 
@@ -212,7 +283,7 @@ def _build_output_row(
         affordability_status=decision.affordability_status,
         recommended_payment_method=decision.recommended_payment_method,
         payment_plan=plan_str,
-        earliest_date_for_full_payment=decision.earliest_date_for_full_payment or "",
+        earliest_date_for_full_payment=earliest,
         spending_changes_needed=changes_str,
         decision_explanation=decision.decision_explanation,
     )

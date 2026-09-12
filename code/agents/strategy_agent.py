@@ -76,7 +76,7 @@ REQUIRED OUTPUT FORMAT (all fields mandatory):
 SPENDING CHANGES FORMAT:
 - stop:<event_id>
 - reduce_to:<event_id>:<new_amount>
-Only use event_ids from the FLEXIBLE SPENDING block.
+Only use event_ids from the FLEXIBLE SPENDING block. Max 3 changes.
 
 STATUS-METHOD COUPLING RULES (follow exactly):
 - method=full_payment AND spending_changes=[] → status=affordable_now
@@ -87,27 +87,33 @@ STATUS-METHOD COUPLING RULES (follow exactly):
 - method=not_recommended → status=not_affordable
 
 METHOD SELECTION RULES (in priority order):
-1. If no OPTIONS shown (or eligible=0) AND full_payment NOT in user methods → not_recommended / not_affordable
+1. If full_payment NOT in user methods AND no installments option → not_recommended / not_affordable
 2. If safe_today >= requested_amount AND full_payment in user methods → full_payment / affordable_now
-3. If eligible installment option exists AND first_date <= request_date + 5 days AND all payments fit within deadline → installments / affordable_with_plan
-4. If eligible installment option exists AND full payment affordable on earliest_full AND earliest_full <= deadline → choose CHEAPER option: installments (with fee) vs wait (no fee). If no fee difference or installments start sooner by >10 days → installments. Otherwise → wait then full_payment.
-5. If safe_today < requested AND spending changes can make it fully safe → full_payment / affordable_with_plan (with spending changes)
-6. If safe_today > 0 AND "partial_payment" in methods list AND request allows it AND second payment fits within deadline → partial_payment / affordable_with_plan
-7. If earliest_full_payment <= deadline AND "full_payment" in methods list → wait / affordable_later
-8. Otherwise → not_recommended / not_affordable
+3. If safe_today >= requested AND only installments in methods → installments / affordable_with_plan
+4. If BOTH installments (fitting deadline) AND partial_payment eligible exist:
+   - Compare COST: partial_payment always costs requested_amount (no fee)
+   - If installment has financing_fee > 0 → partial_payment wins (cheaper)
+   - If installment fee = 0 → installments wins (more structured, no lump-sum risk)
+5. If eligible installment option exists AND all payments fit within deadline → installments / affordable_with_plan
+6. If partial_payment eligible (allows_partial=True, safe > 1% of requested, remainder fits deadline) → partial_payment / affordable_with_plan
+7. If earliest_full_payment <= deadline AND full_payment in methods → wait / affordable_later
+8. If spending changes (stop/reduce flexible events) would unlock full payment → full_payment / affordable_with_plan (with changes)
+9. Otherwise → not_recommended / not_affordable
 
 CRITICAL RULES:
 - amount_safe_to_pay = engine value (do NOT change unless you have strong evidence from messages)
 - If safe_today is within 0.5% of requested (e.g. 166.60 vs 166.61) → treat as safe_today >= requested → affordable_now
 - NEVER use full_payment if "full_payment" is NOT in the methods list
 - NEVER use installments if "installments" is NOT in methods list OR if n > max_installment_months
-- partial_payment: only when "partial_payment" is in methods list AND allows_partial_payment=True AND 0 < safe < requested AND remainder payable by deadline
+- partial_payment: only when "partial_payment" in methods list AND allows_partial_payment=True AND 0 < safe < requested AND remainder payable by deadline
 - DO NOT recommend partial_payment when the remainder is < 1% of requested_amount
-- payment_plan for installments: copy from the option's schedule exactly
+- payment_plan for installments: use EXACT dates from the option (first_payment_date + frequency_days * i)
 - payment_plan for wait: single entry [{"date": earliest_full, "amount": requested}]
 - payment_plan for full_payment: single entry [{"date": request_date, "amount": requested}]
 - payment_plan for partial_payment: exactly 2 entries summing to requested_amount
+- earliest_date_for_full_payment: ALWAYS populate when any safe full-payment date exists, even if after deadline
 """
+
 
     MINI_SYSTEM = """\
 Output ONLY valid JSON. Use EXACTLY this structure (no extra keys, no markdown):
@@ -224,19 +230,35 @@ STATUS RULE: installments/partial_payment → affordable_with_plan; wait → aff
         inst_eligible = [o for o in payment_options if o.payment_method.lower() == "installments"]
         eligible_hint = f"full_payment_allowed={full_pay_eligible} | eligible_installment_options={len(inst_eligible)}"
 
-        # Flexible spending options for the LLM
+        # Flexible spending options — show ALL individual events so LLM can use specific IDs
         flex_events = []
-        for cat in set(profile.reducible_categories + profile.stoppable_categories):
-            # Find the most recent event for this category
-            cat_events = [e for e in ctx.events if e.category == cat and e.direction == "debit" and e.status in ("settled", "scheduled")]
-            if cat_events:
-                latest = max(cat_events, key=lambda x: str(x.event_date or x.settlement_date))
-                flex = f"{cat}: {latest.event_id} (amount={latest.amount}"
-                if cat in profile.reducible_categories and latest.minimum_allowed_amount is not None:
-                    flex += f", min={latest.minimum_allowed_amount}"
-                flex += ")"
-                flex_events.append(flex)
-        flex_text = "\n".join([f"  {f}" for f in flex_events])
+        reducible_set = set(profile.reducible_categories)
+        stoppable_set = set(profile.stoppable_categories)
+        protected_set = set(profile.protected_categories)
+        for ev in ctx.events:
+            if ev.direction != "debit":
+                continue
+            if ev.status not in ("settled", "scheduled"):
+                continue
+            cat = ev.category or ""
+            if cat in protected_set or cat not in (reducible_set | stoppable_set):
+                continue
+            if (ev.amount or 0) <= 0:
+                continue
+            flex = f"  {cat}/{ev.event_id}: amount={ev.amount:.2f}"
+            if cat in reducible_set and ev.minimum_allowed_amount is not None:
+                flex += f" min_allowed={ev.minimum_allowed_amount}"
+                flex += " [reduce_to eligible]"
+            elif cat in stoppable_set and ev.flexibility in ("flexible", "stoppable"):
+                flex += " [stop eligible]"
+            flex_events.append(flex)
+        flex_text = "\n".join(flex_events[:15])  # cap at 15 to avoid prompt overflow
+
+        # Spending changes hint from deterministic optimizer
+        spending_hint_section = ""
+        if message_context and message_context.startswith("[SPENDING_CHANGES_HINT]"):
+            hint_line = message_context.split("\n")[0]
+            spending_hint_section = f"\n⚠️  OPTIMIZER HINT — These changes unlock full payment:\n  {hint_line}\n"
 
         return f"""REQUEST: {request.request_id} | {request.request_date} | {request.request_type}
 amount={request.requested_amount} {profile.home_currency} | deadline={request.desired_completion_date} | partial_ok={request.allows_partial_payment}
@@ -251,12 +273,12 @@ SIMULATION (90d, no payment):
   earliest_full_payment={affordability.earliest_date_for_full_payment or 'beyond 90d'}
 
 RECURRING: {patterns_text or 'none'}
-FLEXIBLE SPENDING (to use in spending_changes_needed):
+FLEXIBLE SPENDING (use exact event_ids below in spending_changes_needed, max 3 changes):
 {flex_text or '  none'}
-
+{spending_hint_section}
 OPTIONS (already filtered to user preferences): {opts_text or 'none (no eligible options exist)'}
 
-MESSAGES: {(message_context or 'none')[:300]}
+MESSAGES: {(message_context or 'none')[:400]}
 {revision}
 Output JSON now."""
 
@@ -304,7 +326,16 @@ Output JSON now."""
         # Tolerance: if safe is within 0.1% of requested, treat as safe >= requested
         tolerance_safe = safe >= req_amt * 0.999
 
-        # Check eligible installment options (those that fit within deadline and max months)
+        # Partial payment eligibility: safe > 1% and < 99.9% of requested, remainder payable by deadline
+        partial_second_date = str(full) if full and str(full) <= deadline_str else deadline_str
+        partial_eligible = (
+            can_partial
+            and safe > req_amt * 0.01
+            and safe < req_amt * 0.999
+            and partial_second_date <= deadline_str
+        )
+
+        # Eligible installment options (fit within deadline and max months)
         max_months = ctx.profile.max_installment_months
         eligible_inst = [
             o for o in payment_options
@@ -312,82 +343,131 @@ Output JSON now."""
             and (max_months is None or (o.number_of_payments or 0) <= max_months)
             and str(o.first_payment_date or "") >= req_date_str
         ]
-        # Filter: all payments must fit within deadline
         eligible_inst_in_deadline = [
             o for o in eligible_inst
             if _installment_fits_deadline(o, deadline_str)
         ]
+        # Sort installment options by total cost ascending, then by option id (tiebreaker)
+        eligible_inst_in_deadline.sort(
+            key=lambda o: (float(o.total_payable_amount or 0), str(o.payment_option_id))
+        )
+
+        # ── Decision tree (implements spec §6.3 ranking) ─────────────────────
+        # Priority order:
+        # 1. full_payment (affordable_now, no changes needed)
+        # 2. full_payment + installments when user can't do full_payment alone
+        # 3. partial_payment vs installments — prefer whichever costs less;
+        #    partial_payment has no financing fee, so it beats any installment with fee
+        # 4. wait (full payment achievable before deadline)
+        # 5. partial_payment (last resort before not_recommended)
+        # 6. not_recommended
+
+        status = "not_affordable"
+        method = "not_recommended"
+        plan: list = []
+        earliest = str(full) if full else ""
 
         if tolerance_safe and can_full:
-            # Full payment affordable today and user accepts full_payment
+            # ── 1. Full payment now ──────────────────────────────────────────
             status = "affordable_now"
             method = "full_payment"
             plan = [PaymentInstallmentSchema(date=req_date_str, amount=req_amt)]
             earliest = req_date_str
 
         elif tolerance_safe and can_installments and eligible_inst_in_deadline:
-            # Full amount safe but user prefers installments (no full_payment in methods)
+            # ── 2. Full amount safe but user only considers installments ──────
             opt = eligible_inst_in_deadline[0]
             status = "affordable_with_plan"
             method = "installments"
             plan = _build_installment_plan(opt)
             earliest = req_date_str
 
+        elif can_installments and eligible_inst_in_deadline and partial_eligible:
+            # ── 3. Both installments and partial available — pick cheaper ─────
+            # Partial payment costs exactly req_amt (no fee).
+            # Installment total may include a financing fee.
+            best_inst = eligible_inst_in_deadline[0]
+            inst_total = float(best_inst.total_payable_amount or req_amt)
+            inst_fee = float(best_inst.financing_fee or 0)
+            # partial_payment always costs req_amt; use it when installments have a fee
+            # or when they start on the same day (no time advantage for installments)
+            if inst_fee <= 0:
+                # Same cost — prefer installments (more structured; avoids needing a
+                # lump-sum on a future date the user may not have)
+                opt = best_inst
+                status = "affordable_with_plan"
+                method = "installments"
+                plan = _build_installment_plan(opt)
+                earliest_val = str(full) if full else ""
+                earliest = earliest_val
+            else:
+                # Installments cost more due to financing fee → partial_payment wins
+                remainder = round(req_amt - safe, 2)
+                status = "affordable_with_plan"
+                method = "partial_payment"
+                plan = [
+                    PaymentInstallmentSchema(date=req_date_str, amount=safe),
+                    PaymentInstallmentSchema(date=partial_second_date, amount=remainder),
+                ]
+                earliest = partial_second_date
+
         elif can_installments and eligible_inst_in_deadline:
-            # Installments available and fit within deadline — prefer over waiting
+            # ── 4a. Installments available, partial not eligible ──────────────
             opt = eligible_inst_in_deadline[0]
             status = "affordable_with_plan"
             method = "installments"
             plan = _build_installment_plan(opt)
             earliest = str(full) if full else ""
 
-        elif full and str(full) <= deadline_str:
-            # Full payment achievable before deadline — recommend wait
+        elif partial_eligible:
+            # ── 4b. Partial payment (installments not available) ──────────────
+            remainder = round(req_amt - safe, 2)
+            status = "affordable_with_plan"
+            method = "partial_payment"
+            plan = [
+                PaymentInstallmentSchema(date=req_date_str, amount=safe),
+                PaymentInstallmentSchema(date=partial_second_date, amount=remainder),
+            ]
+            earliest = partial_second_date
+
+        elif full and str(full) <= deadline_str and can_full:
+            # ── 5. Wait until full payment is safe ───────────────────────────
             status = "affordable_later"
             method = "wait"
             plan = [PaymentInstallmentSchema(date=str(full), amount=req_amt)]
             earliest = str(full)
 
-        elif can_partial and safe > req_amt * 0.01 and safe < req_amt * 0.999:
-            # Partial payment: safe > 0 and remainder is meaningful
-            second_date = str(full) if full and str(full) <= deadline_str else deadline_str
-            if second_date <= deadline_str:
-                remainder = round(req_amt - safe, 2)
-                status = "affordable_with_plan"
-                method = "partial_payment"
-                plan = [
-                    PaymentInstallmentSchema(date=req_date_str, amount=safe),
-                    PaymentInstallmentSchema(date=second_date, amount=remainder),
-                ]
-                earliest = second_date
-            else:
-                status = "not_affordable"
-                method = "not_recommended"
-                plan = []
-                earliest = str(full) if full else ""
-
+        # ── Spending changes recovery (before final not_recommended) ─────────
         if status == "not_affordable" and can_full:
-            # Try to save the day with spending changes
             shortfall = req_amt - safe
             reducible_cats = set(ctx.profile.reducible_categories)
             stoppable_cats = set(ctx.profile.stoppable_categories)
-            flex_evs = [e for e in ctx.events if e.direction == "debit" and e.status in ("settled", "scheduled") and (e.category in reducible_cats or e.category in stoppable_cats)]
-            flex_evs.sort(key=lambda x: x.amount, reverse=True)
-            
-            saved = 0
-            changes = []
+            protected = set(ctx.profile.protected_categories)
+            flex_evs = [
+                e for e in ctx.events
+                if e.direction == "debit"
+                and e.status in ("settled", "scheduled")
+                and (e.category in reducible_cats or e.category in stoppable_cats)
+                and e.category not in protected
+            ]
+            flex_evs.sort(key=lambda x: x.amount or 0, reverse=True)
+
+            saved = 0.0
+            changes: list = []
             for ev in flex_evs:
                 if saved >= shortfall:
                     break
-                if ev.category in stoppable_cats:
+                if len(changes) >= 3:
+                    break
+                if ev.category in stoppable_cats and ev.flexibility in ("flexible", "stoppable"):
                     changes.append(f"stop:{ev.event_id}")
-                    saved += ev.amount
-                elif ev.category in reducible_cats and ev.minimum_allowed_amount is not None:
-                    saving = ev.amount - ev.minimum_allowed_amount
+                    saved += ev.amount or 0
+                elif ev.category in reducible_cats and ev.flexibility == "flexible" and ev.minimum_allowed_amount is not None:
+                    saving = (ev.amount or 0) - ev.minimum_allowed_amount
                     if saving > 0:
                         changes.append(f"reduce_to:{ev.event_id}:{ev.minimum_allowed_amount}")
                         saved += saving
-            
+
             if saved >= shortfall and len(changes) <= 3:
                 return AgentDecisionSchema(
                     amount_safe_to_pay=safe,
@@ -399,12 +479,6 @@ Output JSON now."""
                     decision_explanation="Fallback recovered via spending changes.",
                     internal_reasoning="Deterministic fallback found valid savings."
                 )
-
-        if status == "not_affordable":
-            status = "not_affordable"
-            method = "not_recommended"
-            plan = []
-            earliest = str(full) if full else ""
 
         return AgentDecisionSchema(
             amount_safe_to_pay=safe,
@@ -491,24 +565,39 @@ def _installment_fits_deadline(option, deadline_str: str) -> bool:
         from datetime import date as _date, timedelta
         first = _date.fromisoformat(str(option.first_payment_date)[:10])
         n = option.number_of_payments or 1
-        # Estimate last payment date: approximately monthly intervals
-        last = first + timedelta(days=30 * (n - 1))
+        freq = int(option.payment_frequency_days or 30)
+        # Last payment date uses actual frequency (not hardcoded 30d)
+        last = first + timedelta(days=freq * (n - 1))
         return str(last)[:10] <= deadline_str
     except Exception:
         return True  # If we can't determine, allow it
 
 
 def _build_installment_plan(option) -> list:
-    """Build a PaymentInstallmentSchema list from a payment option."""
+    """Build a PaymentInstallmentSchema list from a payment option.
+
+    Uses payment_frequency_days from the option (not a hardcoded 30-day period).
+    The last payment absorbs any cent-level rounding so the plan sums exactly
+    to total_payable_amount.
+    """
     try:
         from datetime import date as _date, timedelta
         first = _date.fromisoformat(str(option.first_payment_date)[:10])
         n = option.number_of_payments or 1
+        freq = int(option.payment_frequency_days or 30)
         amt = round(float(option.payment_amount or 0), 2)
+        total = round(float(option.total_payable_amount or amt * n), 2)
         plans = []
+        running = 0.0
         for i in range(n):
-            d = first + timedelta(days=30 * i)
-            plans.append(PaymentInstallmentSchema(date=str(d), amount=amt))
+            d = first + timedelta(days=freq * i)
+            if i < n - 1:
+                pay = amt
+            else:
+                # Last payment: absorb rounding remainder
+                pay = round(total - running, 2)
+            running += pay
+            plans.append(PaymentInstallmentSchema(date=str(d), amount=pay))
         return plans
     except Exception:
         return []

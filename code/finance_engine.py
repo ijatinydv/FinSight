@@ -445,9 +445,9 @@ class AffordabilityCalculator:
         # Baseline 90-day projection (no payment)
         baseline = self.simulator.simulate(ctx, request_date, patterns)
 
-        # Binary search: max safe lump-sum payment on request_date
+        # Binary search: max safe lump-sum payment on request_date (full 90-day check per spec).
         safe_amount = _binary_search_safe_amount(
-            ctx, request_date, patterns, min_bal, requested_amount, self.simulator
+            ctx, request_date, patterns, min_bal, requested_amount, self.simulator,
         )
 
         # Find earliest date for full payment, bounded by the request deadline.
@@ -527,15 +527,27 @@ def _binary_search_safe_amount(
     max_amount: float,
     simulator: DailyBalanceSimulator,
     precision: float = 0.01,
+    check_horizon_date: Optional[date] = None,
 ) -> float:
-    """Binary search for the max lump-sum payable on request_date."""
+    """Binary search for the max lump-sum payable on request_date.
+
+    check_horizon_date: if given, only verify min_balance up to this date.
+    This avoids over-conservatism when salary arrives AFTER the deadline —
+    those post-deadline troughs are irrelevant for today's payment decision.
+    When None, checks all 90 days (conservative default).
+    """
     lo, hi = 0.0, max_amount
     safe = 0.0
 
     for _ in range(40):  # 40 iterations gives sub-cent precision
         mid = (lo + hi) / 2
         days = simulator.simulate(ctx, request_date, patterns, [(request_date, mid)])
-        if all(d.balance_end >= min_bal for d in days):
+        if check_horizon_date is not None:
+            # Only check days up through the horizon date
+            relevant_days = [d for d in days if d.date <= check_horizon_date]
+        else:
+            relevant_days = days
+        if all(d.balance_end >= min_bal for d in relevant_days):
             safe = mid
             lo = mid
         else:
@@ -556,39 +568,53 @@ def _find_earliest_full_payment(
     horizon_end: Optional[date] = None,
 ) -> Optional[date]:
     """
-    First day d in [0..365] where a lump-sum payment of requested_amount is safe.
+    First day d in [request_date .. request_date+365] where a lump-sum payment
+    of requested_amount is safe and the balance stays >= min_bal for 60 days after.
 
-    When `horizon_end` (the request's desired_completion_date) is given, the
-    payment must be made on or before it and the balance is only required to
-    stay >= min_bal through that deadline. Checking safety past the deadline is
-    pointless (the purchase window has closed) and produced false negatives when
-    a post-deadline trough dipped below min_balance.
+    Two-pass search:
+      Pass 1 (within deadline): find date within [0 .. horizon_end] — used for the
+        recommended plan (only plans inside the deadline are actionable).
+      Pass 2 (unbounded): if pass 1 fails, search up to 365 days to populate the
+        earliest_date_for_full_payment field even when the date falls after the
+        deadline.  The spec says this field measures financial capacity independently
+        of the user's deadline.
 
-    The simulation window is extended dynamically to cover each candidate pay_date
-    so we never miss an affordable date beyond the 90-day baseline window.
+    The post-payment safety window is 60 days (up from 30) to avoid false passes
+    when a pay_date lands just before a cluster of heavy recurring debits.
     """
-    # Determine how far ahead we're willing to look
-    if horizon_end is not None:
-        max_days = (horizon_end - request_date).days
-    else:
-        max_days = 365  # look up to 1 year ahead
+    POST_PAYMENT_BUFFER = 60  # days to verify balance stays safe after payment
 
-    for day_offset in range(max_days + 1):
+    def _passes(day_offset: int, check_horizon: Optional[date]) -> bool:
         pay_date = request_date + timedelta(days=day_offset)
-        # Simulate far enough to cover this pay_date plus 30 more days of expenses
-        sim_horizon = max(day_offset + 30, simulator.HORIZON_DAYS)
+        sim_horizon = max(day_offset + POST_PAYMENT_BUFFER, simulator.HORIZON_DAYS)
         days = simulator.simulate(
             ctx, request_date, patterns, [(pay_date, requested_amount)],
             horizon_days=sim_horizon,
         )
-        check_end = horizon_end if horizon_end is not None else pay_date + timedelta(days=30)
-        if all(
-            d.balance_end >= min_bal
-            for d in days
-            if d.date <= check_end
-        ):
-            return pay_date
-    return None  # Not feasible within the horizon
+        if check_horizon is not None:
+            check_end = check_horizon
+        else:
+            check_end = pay_date + timedelta(days=POST_PAYMENT_BUFFER)
+        return all(d.balance_end >= min_bal for d in days if d.date <= check_end)
+
+    # ── Pass 1: within deadline ───────────────────────────────────────────────
+    if horizon_end is not None:
+        max_days_pass1 = (horizon_end - request_date).days
+        for day_offset in range(max_days_pass1 + 1):
+            if _passes(day_offset, horizon_end):
+                return request_date + timedelta(days=day_offset)
+
+    # ── Pass 2: unbounded (up to 365 days) ───────────────────────────────────
+    # Start from the day after the deadline (or day 0 when no deadline given).
+    start_offset = 0
+    if horizon_end is not None:
+        start_offset = (horizon_end - request_date).days + 1
+
+    for day_offset in range(start_offset, 366):
+        if _passes(day_offset, None):
+            return request_date + timedelta(days=day_offset)
+
+    return None  # Not feasible within 1 year
 
 
 def _parse_date(date_str: Optional[str]) -> date:
