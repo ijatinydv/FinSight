@@ -59,21 +59,31 @@ class StrategyAgent:
     """
 
     SYSTEM_PROMPT = """\
-You are a financial decision agent. Given a user's financial profile, a 90-day balance projection, and payment options for a purchase request, you must output a single JSON object representing the optimal decision.
+You are a financial decision agent. Analyze the financial data and output ONLY a JSON object.
 
-Rules (MANDATORY):
-1. balance must NEVER fall below minimum_balance_to_keep on any day, including after any payment
-2. amount_safe_to_pay is the max safe to pay TODAY (on request_date), between 0 and requested_amount inclusive
-3. affordability_status: "affordable_now" if full amount safe today; "affordable_with_plan" if completable via installments/partial/spending-changes by deadline; "affordable_later" if full amount safe after request_date but no plan needed; "not_affordable" if no safe path exists
-4. recommended_payment_method: "full_payment", "partial_payment", "installments", "wait", or "not_recommended"
-5. payment_plan: [{date, amount}] chronologically. For partial_payment: exactly 2 payments summing to requested_amount. For installments: follow the chosen option exactly.
-6. spending_changes_needed: only non-protected, flexible categories the user permits; max 3 items; format "stop:<event_id>" or "reduce_to:<event_id>:<new_amount>"
-7. Prefer: deadline completion > no spending changes > min total cost > earlier start > fewer payments > lower payment_option_id
-8. If installments are the best option, choose the one with minimum total_payable_amount whose number_of_payments <= max_installment_months
-9. NEVER count pending credits, refunds, bonuses, or investment gains as usable income
-10. If the user's payment_methods_user_will_consider does not include a method, do NOT recommend it
+REQUIRED OUTPUT FORMAT (fill in every field — no markdown, no extra text):
+{
+  "amount_safe_to_pay": <number between 0 and requested_amount>,
+  "affordability_status": "<one of: affordable_now | affordable_with_plan | affordable_later | not_affordable>",
+  "recommended_payment_method": "<one of: full_payment | partial_payment | installments | wait | not_recommended>",
+  "payment_plan": [{"date": "YYYY-MM-DD", "amount": <number>}],
+  "earliest_date_for_full_payment": "<YYYY-MM-DD or null>",
+  "spending_changes_needed": [],
+  "decision_explanation": "<1-2 sentences with actual numbers>",
+  "internal_reasoning": "<brief chain of thought>"
+}
 
-Output ONLY a valid JSON object matching this schema exactly. No markdown, no explanation outside the JSON.
+DECISION RULES:
+- amount_safe_to_pay = max payable TODAY so balance stays >= minimum_balance at all future days
+- affordable_now: full amount safe today → full_payment
+- affordable_with_plan: full amount payable via installments/partial by deadline → installments or partial_payment
+- affordable_later: full amount only safe on a future date, no plan fits deadline → wait
+- not_affordable: no safe path exists within horizon → not_recommended
+- payment_plan for partial_payment = exactly 2 entries summing to requested_amount
+- payment_plan for installments = follow the chosen option exactly (dates and amounts)
+- payment_plan for full_payment/wait = single entry on the payment date
+- NEVER count pending credits, refunds, bonuses as income
+- Only recommend installments if user's payment_methods_user_will_consider includes "installments"
 """
 
     def propose(
@@ -88,6 +98,9 @@ Output ONLY a valid JSON object matching this schema exactly. No markdown, no ex
         """Generate a decision proposal. If critic_feedback is provided, revise accordingly."""
         prompt = self._build_prompt(request, ctx, affordability, payment_options, message_context, critic_feedback)
 
+        import time
+        time.sleep(1.0)  # Rate limit throttle
+        
         try:
             resp = client.chat.completions.create(
                 model=MODEL,
@@ -96,11 +109,20 @@ Output ONLY a valid JSON object matching this schema exactly. No markdown, no ex
                     {"role": "user",   "content": prompt},
                 ],
                 temperature=0,
-                response_format={"type": "json_object"},
-                max_tokens=1024,
+                max_tokens=4096,
             )
             raw = resp.choices[0].message.content or "{}"
+            logger.info("Raw LLM output for %s: %s", request.request_id, repr(raw))
+            # Strip markdown fences if present
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.strip()
             data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError(f"Expected dict, got {type(data)}")
             return AgentDecisionSchema(**data)
         except (json.JSONDecodeError, ValidationError, Exception) as e:
             logger.warning("StrategyAgent parse error: %s", e)

@@ -1,4 +1,4 @@
-﻿"""
+"""
 agents/explainer_agent.py — Explainer Agent
 
 Generates the final decision_explanation string in the style of sample_requests.csv:
@@ -67,6 +67,9 @@ class ExplainerAgent:
             f"current_balance={profile.current_available_balance:.2f}\n"
             f"Internal reasoning: {decision.internal_reasoning[:300]}"
         )
+
+        import time
+        time.sleep(1.0)  # Rate limit throttle
 
         try:
             resp = client.chat.completions.create(

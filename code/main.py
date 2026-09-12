@@ -58,6 +58,9 @@ async def process_single(
     sem: asyncio.Semaphore,
 ) -> tuple:
     async with sem:
+        # Throttle to respect 30 RPM limit (allow 2 concurrent, but space them out)
+        await asyncio.sleep(1.5)
+        
         ctx = contexts.get(request.user_id)
         if not ctx:
             logger.error("No context for user %s (request %s)", request.user_id, request.request_id)
@@ -71,7 +74,7 @@ async def process_single(
 
 
 async def run(requests_to_process: list, contexts: dict, msg_patches: dict) -> list:
-    sem = asyncio.Semaphore(10)
+    sem = asyncio.Semaphore(2)  # Reduce concurrency to 2 to avoid Novita AI rate limits
     loop = ReflexionLoop()
     tasks = [
         process_single(req, contexts, msg_patches, loop, sem)
