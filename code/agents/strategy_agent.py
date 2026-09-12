@@ -59,32 +59,35 @@ class StrategyAgent:
     """
 
     SYSTEM_PROMPT = """\
-You are a financial decision agent. Analyze the financial data and output ONLY a JSON object.
+You are a financial decision agent. Output ONLY a JSON object — no markdown, no text outside JSON.
 
-REQUIRED OUTPUT FORMAT (fill in every field — no markdown, no extra text):
+REQUIRED OUTPUT FORMAT (all fields mandatory):
 {
-  "amount_safe_to_pay": <number between 0 and requested_amount>,
-  "affordability_status": "<one of: affordable_now | affordable_with_plan | affordable_later | not_affordable>",
-  "recommended_payment_method": "<one of: full_payment | partial_payment | installments | wait | not_recommended>",
+  "amount_safe_to_pay": <number 0 to requested_amount>,
+  "affordability_status": "<affordable_now|affordable_with_plan|affordable_later|not_affordable>",
+  "recommended_payment_method": "<full_payment|partial_payment|installments|wait|not_recommended>",
   "payment_plan": [{"date": "YYYY-MM-DD", "amount": <number>}],
   "earliest_date_for_full_payment": "<YYYY-MM-DD or null>",
   "spending_changes_needed": [],
-  "decision_explanation": "<1-2 sentences with actual numbers>",
-  "internal_reasoning": "<brief chain of thought>"
+  "decision_explanation": "<max 30 words, include key numbers>",
+  "internal_reasoning": "<max 20 words>"
 }
 
-DECISION RULES:
-- amount_safe_to_pay = max payable TODAY so balance stays >= minimum_balance at all future days
-- affordable_now: full amount safe today → full_payment
-- affordable_with_plan: full amount payable via installments/partial by deadline → installments or partial_payment
-- affordable_later: full amount only safe on a future date, no plan fits deadline → wait
-- not_affordable: no safe path exists within horizon → not_recommended
-- payment_plan for partial_payment = exactly 2 entries summing to requested_amount
-- payment_plan for installments = follow the chosen option exactly (dates and amounts)
-- payment_plan for full_payment/wait = single entry on the payment date
-- NEVER count pending credits, refunds, bonuses as income
-- Only recommend installments if user's payment_methods_user_will_consider includes "installments"
+STATUS RULES:
+- affordable_now: amount_safe_to_pay >= requested_amount → full_payment
+- affordable_with_plan: full amount achievable via installments/partial_payment by deadline → installments or partial_payment
+- affordable_later: full amount safe on future date but deadline prevents plan → wait
+- not_affordable: no safe path in 90-day horizon → not_recommended
+
+KEY RULES:
+- amount_safe_to_pay = MAX payable TODAY keeping balance >= minimum_balance every future day
+- NEVER count pending credits, refunds, or bonuses as income
+- Only recommend installments if "installments" is in payment_methods_user_will_consider
+- partial_payment requires allows_partial_payment=True; plan = exactly 2 entries summing to requested_amount
+- payment_plan for wait/full_payment = 1 entry on payment date
 """
+
+    MINI_SYSTEM = "Output ONLY valid JSON with these keys: amount_safe_to_pay, affordability_status, recommended_payment_method, payment_plan, earliest_date_for_full_payment, spending_changes_needed, decision_explanation, internal_reasoning."
 
     def propose(
         self,
@@ -96,38 +99,58 @@ DECISION RULES:
         critic_feedback: Optional[str] = None,
     ) -> AgentDecisionSchema:
         """Generate a decision proposal. If critic_feedback is provided, revise accordingly."""
-        prompt = self._build_prompt(request, ctx, affordability, payment_options, message_context, critic_feedback)
-
         import time
+        prompt = self._build_prompt(request, ctx, affordability, payment_options, message_context, critic_feedback)
         time.sleep(1.0)  # Rate limit throttle
-        
-        try:
-            resp = client.chat.completions.create(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user",   "content": prompt},
-                ],
-                temperature=0,
-                max_tokens=4096,
-            )
-            raw = resp.choices[0].message.content or "{}"
-            logger.info("Raw LLM output for %s: %s", request.request_id, repr(raw))
-            # Strip markdown fences if present
+
+        def _parse(raw: str) -> AgentDecisionSchema:
             raw = raw.strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
                     raw = raw[4:]
                 raw = raw.strip()
+            # Attempt to repair truncated JSON
+            if raw and not raw.endswith("}"):
+                # Find last complete comma-separated entry and close
+                for pos in range(len(raw) - 1, 0, -1):
+                    if raw[pos] == ',':
+                        try:
+                            json.loads(raw[:pos] + "}")
+                            raw = raw[:pos] + "}"
+                            break
+                        except Exception:
+                            continue
             data = json.loads(raw)
-            if not isinstance(data, dict):
-                raise ValueError(f"Expected dict, got {type(data)}")
+            if not isinstance(data, dict) or not data:
+                raise ValueError("Empty or non-dict JSON")
             return AgentDecisionSchema(**data)
-        except (json.JSONDecodeError, ValidationError, Exception) as e:
-            logger.warning("StrategyAgent parse error: %s", e)
-            # Deterministic fallback
-            return self._deterministic_fallback(request, ctx, affordability, payment_options)
+
+        def _call(system: str, user_prompt: str) -> AgentDecisionSchema:
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user_prompt},
+                ],
+                temperature=0,
+                max_tokens=4096,
+            )
+            raw = resp.choices[0].message.content or "{}"
+            logger.info("Raw LLM output for %s: %s", request.request_id, repr(raw[:400]))
+            return _parse(raw)
+
+        try:
+            return _call(self.SYSTEM_PROMPT, prompt)
+        except Exception as e:
+            logger.warning("StrategyAgent first attempt failed (%s) — retrying with mini-prompt", e)
+            time.sleep(2.0)
+            try:
+                mini_prompt = self._build_mini_prompt(request, ctx, affordability, payment_options)
+                return _call(self.MINI_SYSTEM, mini_prompt)
+            except Exception as e2:
+                logger.warning("StrategyAgent mini-prompt failed (%s) — deterministic fallback", e2)
+                return self._deterministic_fallback(request, ctx, affordability, payment_options)
 
     def _build_prompt(
         self,
@@ -139,69 +162,61 @@ DECISION RULES:
         critic_feedback: Optional[str],
     ) -> str:
         profile = ctx.profile
-        bal_summary = _balance_summary(affordability)
 
-        # Format payment options
+        # Format payment options (compact)
         opts_text = "\n".join([
-            f"  - Option {o.payment_option_id}: {o.payment_method}, "
-            f"amount={o.payment_amount} {profile.home_currency}, "
-            f"n_payments={o.number_of_payments}, "
-            f"first={o.first_payment_date}, "
-            f"freq={o.payment_frequency_days}d, "
-            f"fee={o.financing_fee or 0:.2f}, "
-            f"total={o.total_payable_amount}"
+            f"  opt{o.payment_option_id}: {o.payment_method} n={o.number_of_payments} amt={o.payment_amount} first={o.first_payment_date} fee={o.financing_fee or 0:.0f} total={o.total_payable_amount}"
             for o in payment_options
         ])
 
-        # Recurring patterns
+        # Recurring patterns — top 5 by amount (most impactful)
+        top_patterns = sorted(affordability.recurring_patterns, key=lambda p: p.avg_amount, reverse=True)[:5]
         patterns_text = "\n".join([
-            f"  - {p.category} ({p.direction}): ~{p.avg_amount:.0f} {profile.home_currency} every {p.avg_period_days:.0f}d"
-            for p in affordability.recurring_patterns
+            f"  {p.category}({p.direction}): ~{p.avg_amount:.0f} every {p.avg_period_days:.0f}d"
+            for p in top_patterns
         ])
 
-        revision = f"\n\nCRITIC FEEDBACK (revise your answer accordingly):\n{critic_feedback}" if critic_feedback else ""
+        revision = f"\nCRITIC FEEDBACK:\n{critic_feedback}" if critic_feedback else ""
 
-        return f"""
-REQUEST:
-  request_id: {request.request_id}
-  request_date: {request.request_date}
-  request_type: {request.request_type}
-  requested_amount: {request.requested_amount} {profile.home_currency}
-  desired_completion_date: {request.desired_completion_date}
-  allows_partial_payment: {request.allows_partial_payment}
-  request_text: {request.request_text or 'N/A'}
+        return f"""REQUEST: {request.request_id} | {request.request_date} | {request.request_type}
+amount={request.requested_amount} {profile.home_currency} | deadline={request.desired_completion_date} | partial_ok={request.allows_partial_payment}
 
-USER PROFILE:
-  user_id: {profile.user_id}
-  home_currency: {profile.home_currency}
-  current_balance: {profile.current_available_balance:.2f}
-  minimum_balance_to_keep: {profile.minimum_balance_to_keep:.2f}
-  max_installment_months: {profile.max_installment_months or 'none (installments not considered)'}
-  financial_priorities: {', '.join(profile.priorities)}
-  protected_categories: {', '.join(profile.protected_categories)}
-  reducible_categories: {', '.join(profile.reducible_categories)}
-  stoppable_categories: {', '.join(profile.stoppable_categories)}
-  payment_methods_user_will_consider: {', '.join(profile.payment_methods)}
+PROFILE: balance={profile.current_available_balance:.2f} min_keep={profile.minimum_balance_to_keep:.2f} {profile.home_currency}
+methods={', '.join(profile.payment_methods)} | max_installment_months={profile.max_installment_months or 'N/A'}
+protected={', '.join(profile.protected_categories)} | reducible={', '.join(profile.reducible_categories)} | stoppable={', '.join(profile.stoppable_categories)}
 
-90-DAY BALANCE SIMULATION (no payment):
-  day_0 balance: {_safe_balance(affordability, request.request_date, profile.current_available_balance):.2f} {profile.home_currency}
-  minimum projected balance: {affordability.min_balance_in_baseline:.2f} {profile.home_currency}
-  amount_safe_to_pay TODAY: {affordability.amount_safe_to_pay:.2f} {profile.home_currency}
-  earliest date for FULL payment: {affordability.earliest_date_for_full_payment or 'not within 90 days'}
-  balance milestones: {bal_summary}
+SIMULATION (90d, no payment):
+  day0={_safe_balance(affordability, request.request_date, profile.current_available_balance):.2f} min_projected={affordability.min_balance_in_baseline:.2f} safe_today={affordability.amount_safe_to_pay:.2f} {profile.home_currency}
+  earliest_full_payment={affordability.earliest_date_for_full_payment or 'beyond 90d'}
 
-RECURRING PATTERNS DETECTED:
-{patterns_text or '  (none detected)'}
+RECURRING: {patterns_text or 'none'}
 
-PAYMENT OPTIONS AVAILABLE:
-{opts_text or '  (none available)'}
+OPTIONS: {opts_text or 'none'}
 
-RELEVANT MESSAGES/CONTEXT:
-{message_context or '  (none)'}
+MESSAGES: {(message_context or 'none')[:300]}
 {revision}
+Output JSON now."""
 
-Now output a JSON decision object.
-"""
+    def _build_mini_prompt(
+        self,
+        request: PurchaseRequest,
+        ctx: UserContext,
+        affordability: AffordabilityResult,
+        payment_options: List[PaymentOption],
+    ) -> str:
+        """Ultra-compact prompt for when the main prompt fails."""
+        profile = ctx.profile
+        opts = " | ".join([
+            f"opt{o.payment_option_id}:{o.payment_method}:n={o.number_of_payments}:total={o.total_payable_amount}"
+            for o in payment_options
+        ])
+        return (
+            f"requested={request.requested_amount} {profile.home_currency} on {request.request_date} deadline={request.desired_completion_date} partial_ok={request.allows_partial_payment}\n"
+            f"balance={profile.current_available_balance:.2f} min={profile.minimum_balance_to_keep:.2f} safe_today={affordability.amount_safe_to_pay:.2f} earliest_full={affordability.earliest_date_for_full_payment or 'N/A'}\n"
+            f"methods={','.join(profile.payment_methods)} max_installments={profile.max_installment_months or 'N/A'}\n"
+            f"options: {opts or 'none'}\n"
+            "Output JSON with all required fields."
+        )
 
     def _deterministic_fallback(
         self,
