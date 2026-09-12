@@ -1,0 +1,7 @@
+﻿pandas
+pydantic
+pydantic-settings
+python-dotenv
+requests
+openai
+numpy
