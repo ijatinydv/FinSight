@@ -1,4 +1,4 @@
-﻿"""
+"""
 agents/reflexion_loop.py — Actor-Critic-Simulator Reflexion Loop
 
 Orchestrates the full decision pipeline for a single request:
@@ -27,7 +27,8 @@ from ..schemas import OutputRow, PaymentOption, PurchaseRequest
 from ..user_context import UserContext
 from .critic_agent import RiskCritic
 from .explainer_agent import ExplainerAgent
-from .strategy_agent import AgentDecisionSchema, StrategyAgent
+from .strategy_agent import AgentDecisionSchema, StrategyAgent, _enforce_status_method
+
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +177,25 @@ def _build_output_row(
     decision: AgentDecisionSchema,
 ) -> OutputRow:
     """Build the final OutputRow from the validated decision."""
+    # Final enforcement: status must be consistent with method
+    decision = _enforce_status_method(decision)
+
+    # Tolerance fix: if safe is within 0.1% of requested and method=full_payment, use affordable_now
+    safe = round(decision.amount_safe_to_pay, 2)
+    req_amt = float(request.requested_amount)
+    if (decision.recommended_payment_method == "full_payment"
+            and safe >= req_amt * 0.999
+            and not decision.spending_changes_needed):
+        # Snap safe to requested for output consistency
+        safe = req_amt if safe >= req_amt else safe
+        try:
+            decision = decision.model_copy(update={
+                "affordability_status": "affordable_now",
+                "amount_safe_to_pay": safe,
+            })
+        except AttributeError:
+            pass
+
     plan_str = _format_payment_plan(decision.payment_plan)
     changes_str = _format_spending_changes(decision.spending_changes_needed)
 

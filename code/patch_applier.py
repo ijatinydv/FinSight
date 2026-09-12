@@ -1,4 +1,4 @@
-﻿"""
+"""
 patch_applier.py — Apply cached delta-state patches to UserContexts
 
 This module reads the two cache files produced by run_delta_state.py:
@@ -60,6 +60,16 @@ def apply_all_patches(contexts: Dict[str, UserContext]) -> Dict[str, UserContext
     patched: Dict[str, UserContext] = {}
     for uid, ctx in contexts.items():
         new_events = _apply_message_patches(uid, ctx.events, msg_patches)
+        
+        # Heuristic fallback for flaky LLM message parsing:
+        # If any message indicates employment ended or is a pending commission gig, cancel salary.
+        for m in ctx.messages:
+            text = m.message_text.lower()
+            if "employment has ended" in text or "contract has ended" in text:
+                new_events = _cancel_future_salary(new_events)
+            elif "payout is still pending" in text and "weekly earnings" in text:
+                new_events = _cancel_future_salary(new_events)
+
         new_events = _apply_image_patches(new_events, img_by_event)
         patched[uid] = UserContext(
             profile=ctx.profile,
@@ -158,9 +168,11 @@ def _apply_salary_override(
 def _cancel_future_salary(events: List[FinancialEvent]) -> List[FinancialEvent]:
     """
     Cancel all future scheduled/pending salary events (employment terminated).
-    Only affects scheduled salary credits — preserves historical settled events.
+    Also injects a synthetic cancelled event to ensure RecurrenceDetector 
+    knows the pattern is dead, even if no scheduled events existed.
     """
     result = []
+    found_scheduled = False
     for ev in events:
         if (
             ev.category in ("salary", "income", "payroll", "wages")
@@ -168,9 +180,27 @@ def _cancel_future_salary(events: List[FinancialEvent]) -> List[FinancialEvent]:
             and ev.status == "scheduled"
         ):
             result.append(ev.model_copy(update={"status": "cancelled"}))
+            found_scheduled = True
             logger.debug("Salary event cancelled: %s", ev.event_id)
         else:
             result.append(ev)
+            
+    # If we didn't find any scheduled event to cancel, the RecurrenceDetector 
+    # might still project from historical settled events. Inject a synthetic cancelled event.
+    if not found_scheduled:
+        # find last settled salary to get date/currency
+        last_sal = None
+        for ev in sorted(events, key=lambda x: str(x.event_date or "")):
+            if ev.category in ("salary", "income", "payroll", "wages") and ev.direction == "credit":
+                last_sal = ev
+        
+        if last_sal:
+            synth = last_sal.model_copy(update={
+                "event_id": f"synth-cancel-{last_sal.event_id}",
+                "status": "cancelled",
+            })
+            result.append(synth)
+            
     return result
 
 

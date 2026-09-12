@@ -99,15 +99,35 @@ class RecurrenceDetector:
 
         # Group settled by (category, direction)
         groups: Dict[str, List[FinancialEvent]] = defaultdict(list)
+        
+        # Keywords that indicate variable income that should NOT be projected
+        volatile_keywords = {"bonus", "commission", "refund", "lottery", "gain"}
+        
         for ev in settled:
             cat = ev.category or "uncategorized"
+            desc = (ev.description or "").lower()
+            
+            # Do not project historical bonuses/commissions per AGENTS.md rules
+            if ev.direction == "credit" and any(k in desc for k in volatile_keywords):
+                continue
+                
             key = f"{cat}:{ev.direction}"
             groups[key].append(ev)
 
         patterns: List[RecurringPattern] = []
         seen_keys = set()
+        
+        # Build set of cancelled categories to skip pattern projection
+        cancelled_keys = set()
+        for ev in events:
+            if ev.status == "cancelled":
+                cat = ev.category or "uncategorized"
+                cancelled_keys.add(f"{cat}:{ev.direction}")
 
         for key, evs in groups.items():
+            if key in cancelled_keys:
+                continue
+                
             has_scheduled_confirm = key in scheduled_future
             category_name = key.rsplit(":", 1)[0]
             is_salary = category_name in self.SALARY_CATEGORIES
@@ -154,10 +174,18 @@ class RecurrenceDetector:
                 continue
 
 
-            # Use trimmed mean of amounts (conservative)
+            # Compute amount
             amounts = [e.amount for e in evs_sorted[-6:]]
             avg_amount = _trimmed_mean(amounts)
-
+            
+            # CRITICAL FIX for salary_override patches:
+            # If the most recent amount is significantly different from the trimmed mean
+            # (e.g., >10% diff), assume a structural change (like a salary increase) 
+            # and use the most recent amount for future projections instead.
+            latest_amount = evs_sorted[-1].amount
+            if abs(latest_amount - avg_amount) > (0.10 * avg_amount) and len(amounts) >= 2:
+                # E.g. last 4 were 10,000, last 1 is 15,000 (salary increase patch)
+                avg_amount = latest_amount
             # last_date = most recent known occurrence (settled or scheduled)
             if has_scheduled_confirm:
                 sched_evs = scheduled_future[key]
