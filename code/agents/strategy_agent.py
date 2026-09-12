@@ -87,7 +87,21 @@ KEY RULES:
 - payment_plan for wait/full_payment = 1 entry on payment date
 """
 
-    MINI_SYSTEM = "Output ONLY valid JSON with these keys: amount_safe_to_pay, affordability_status, recommended_payment_method, payment_plan, earliest_date_for_full_payment, spending_changes_needed, decision_explanation, internal_reasoning."
+    MINI_SYSTEM = """\
+Output ONLY valid JSON. Use EXACTLY this structure (no extra keys, no markdown):
+{
+  "amount_safe_to_pay": 1234.56,
+  "affordability_status": "affordable_now",
+  "recommended_payment_method": "full_payment",
+  "payment_plan": [{"date": "2024-01-15", "amount": 1234.56}],
+  "earliest_date_for_full_payment": "2024-01-15",
+  "spending_changes_needed": [],
+  "decision_explanation": "one sentence",
+  "internal_reasoning": "brief"
+}
+payment_plan MUST be a JSON array of objects with "date" and "amount" keys.
+spending_changes_needed MUST be a JSON array (empty [] or list of strings).
+"""
 
     def propose(
         self,
