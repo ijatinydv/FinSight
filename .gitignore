@@ -1,0 +1,8 @@
+
+# FinSight ignores
+log.txt
+.env
+__pycache__/
+code/.cache/
+.venv/
+venv/
