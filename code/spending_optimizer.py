@@ -161,7 +161,7 @@ def _build_candidates(
         if ev_amt <= 0:
             continue
 
-        if cat in stoppable and ev.flexibility in ("flexible", "stoppable"):
+        if cat in stoppable and ev.flexibility in ("stoppable", "reducible_or_stoppable"):
             candidates.append({
                 "event_id": ev.event_id,
                 "category": cat,
@@ -171,7 +171,7 @@ def _build_candidates(
                 "change_str": f"stop:{ev.event_id}",
             })
             seen_event_ids.add(ev.event_id)
-        elif cat in reducible and ev.flexibility == "flexible" and ev.minimum_allowed_amount is not None:
+        elif cat in reducible and ev.flexibility in ("reducible", "reducible_or_stoppable") and ev.minimum_allowed_amount is not None:
             saving = ev_amt - ev.minimum_allowed_amount
             if saving > 0:
                 candidates.append({

@@ -552,8 +552,15 @@ def _binary_search_safe_amount(
             lo = mid
         else:
             hi = mid
-        if hi - lo < precision:
-            break
+
+    # Check if the exact max_amount is safe to avoid asymptote rounding errors
+    days_max = simulator.simulate(ctx, request_date, patterns, [(request_date, max_amount)])
+    if check_horizon_date is not None:
+        relevant_days_max = [d for d in days_max if d.date <= check_horizon_date]
+    else:
+        relevant_days_max = days_max
+    if all(d.balance_end >= min_bal for d in relevant_days_max):
+        safe = max_amount
 
     return round(safe, 2)
 
