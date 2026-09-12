@@ -366,7 +366,41 @@ Output JSON now."""
                 plan = []
                 earliest = str(full) if full else ""
 
-        else:
+        if status == "not_affordable" and can_full:
+            # Try to save the day with spending changes
+            shortfall = req_amt - safe
+            reducible_cats = set(ctx.profile.reducible_categories)
+            stoppable_cats = set(ctx.profile.stoppable_categories)
+            flex_evs = [e for e in ctx.events if e.direction == "debit" and e.status in ("settled", "scheduled") and (e.category in reducible_cats or e.category in stoppable_cats)]
+            flex_evs.sort(key=lambda x: x.amount, reverse=True)
+            
+            saved = 0
+            changes = []
+            for ev in flex_evs:
+                if saved >= shortfall:
+                    break
+                if ev.category in stoppable_cats:
+                    changes.append(f"stop:{ev.event_id}")
+                    saved += ev.amount
+                elif ev.category in reducible_cats and ev.minimum_allowed_amount is not None:
+                    saving = ev.amount - ev.minimum_allowed_amount
+                    if saving > 0:
+                        changes.append(f"reduce_to:{ev.event_id}:{ev.minimum_allowed_amount}")
+                        saved += saving
+            
+            if saved >= shortfall and len(changes) <= 3:
+                return AgentDecisionSchema(
+                    amount_safe_to_pay=safe,
+                    affordability_status="affordable_with_plan",
+                    recommended_payment_method="full_payment",
+                    payment_plan=[PaymentInstallmentSchema(date=req_date_str, amount=req_amt)],
+                    earliest_date_for_full_payment=req_date_str,
+                    spending_changes_needed=changes,
+                    decision_explanation="Fallback recovered via spending changes.",
+                    internal_reasoning="Deterministic fallback found valid savings."
+                )
+
+        if status == "not_affordable":
             status = "not_affordable"
             method = "not_recommended"
             plan = []

@@ -1,4 +1,4 @@
-﻿"""
+"""
 agents/critic_agent.py — Risk Critic Agent
 
 Takes the Strategy Agent's proposed decision and validates it against
@@ -77,6 +77,10 @@ class RiskCritic:
                     f"Last payment date {last_date} exceeds desired_completion_date {desired_completion_date}. "
                     f"Restructure the plan so all payments complete by {desired_completion_date}."
                 )
+
+        if decision.recommended_payment_method == "full_payment" and decision.payment_plan:
+            if len(decision.payment_plan) != 1 or decision.payment_plan[0].date != str(request_date):
+                return False, f"For full_payment, payment_plan must have exactly one entry on request_date ({request_date}). If paying later, use method='wait'."
 
         # ── 4. Balance simulation ─────────────────────────────────────
         if decision.payment_plan:

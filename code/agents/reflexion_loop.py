@@ -66,8 +66,15 @@ class ReflexionLoop:
         # Filter options by user payment preferences and max_installment_months
         eligible_options = _filter_payment_options(payment_options, ctx.profile)
 
-        # 1. Deterministic affordability baseline
-        affordability = self.calc.compute(ctx, req_date, float(request.requested_amount))
+        # 1. Deterministic affordability baseline (earliest_date bounded by deadline)
+        dcd = (
+            date.fromisoformat(str(request.desired_completion_date)[:10])
+            if request.desired_completion_date else None
+        )
+        affordability = self.calc.compute(
+            ctx, req_date, float(request.requested_amount),
+            desired_completion_date=dcd,
+        )
 
         # 2. Build message context string
         msg_context = _build_message_context(request, ctx, msg_patches)

@@ -304,11 +304,16 @@ class DailyBalanceSimulator:
         request_date: date,
         recurring_patterns: List[RecurringPattern],
         payment_installments: Optional[List[Tuple[date, float]]] = None,
+        horizon_days: Optional[int] = None,
     ) -> List[DayEntry]:
         """
-        Returns a list of 91 DayEntry objects (day 0 through day 90).
+        Returns DayEntry objects for each day from day 0 through day horizon_days.
+        Defaults to HORIZON_DAYS (90) for fast baseline runs.
+        Pass a larger horizon_days (e.g. 365) only for _find_earliest_full_payment searches.
         payment_installments: optional list of (date, amount) debits to include in projection.
         """
+        if horizon_days is None:
+            horizon_days = self.HORIZON_DAYS
         balance = ctx.profile.current_available_balance
         day_entries: List[DayEntry] = []
 
@@ -336,7 +341,7 @@ class DailyBalanceSimulator:
         # Project recurring patterns into the horizon
         proj_debits: Dict[date, float] = defaultdict(float)
         proj_credits: Dict[date, float] = defaultdict(float)
-        end_date = request_date + timedelta(days=self.HORIZON_DAYS)
+        end_date = request_date + timedelta(days=horizon_days)
 
         for pat in recurring_patterns:
             # Next occurrence after request_date
@@ -358,7 +363,7 @@ class DailyBalanceSimulator:
                 next_occ = _step_recurring(next_occ, pat.avg_period_days)
 
         # Simulate day by day
-        for day_offset in range(self.HORIZON_DAYS + 1):
+        for day_offset in range(horizon_days + 1):
             current_date = request_date + timedelta(days=day_offset)
             notes: List[str] = []
 
@@ -428,6 +433,7 @@ class AffordabilityCalculator:
         ctx: UserContext,
         request_date: date,
         requested_amount: float,
+        desired_completion_date: Optional[date] = None,
     ) -> "AffordabilityResult":
         min_bal = ctx.profile.minimum_balance_to_keep
         patterns = self.detector.detect(
@@ -444,9 +450,13 @@ class AffordabilityCalculator:
             ctx, request_date, patterns, min_bal, requested_amount, self.simulator
         )
 
-        # Find earliest date for full payment
+        # Find earliest date for full payment, bounded by the request deadline.
+        # A purchase not completed by desired_completion_date is moot, so the
+        # full-payment safety check runs only through that deadline. This fixes
+        # false None results when a post-deadline trough would breach min_balance.
         earliest_full = _find_earliest_full_payment(
-            ctx, request_date, patterns, min_bal, requested_amount, self.simulator
+            ctx, request_date, patterns, min_bal, requested_amount, self.simulator,
+            horizon_end=desired_completion_date,
         )
 
         return AffordabilityResult(
@@ -543,14 +553,42 @@ def _find_earliest_full_payment(
     min_bal: float,
     requested_amount: float,
     simulator: DailyBalanceSimulator,
+    horizon_end: Optional[date] = None,
 ) -> Optional[date]:
-    """First day d in [0..90] where a lump-sum payment of requested_amount is safe."""
-    for day_offset in range(91):
+    """
+    First day d in [0..365] where a lump-sum payment of requested_amount is safe.
+
+    When `horizon_end` (the request's desired_completion_date) is given, the
+    payment must be made on or before it and the balance is only required to
+    stay >= min_bal through that deadline. Checking safety past the deadline is
+    pointless (the purchase window has closed) and produced false negatives when
+    a post-deadline trough dipped below min_balance.
+
+    The simulation window is extended dynamically to cover each candidate pay_date
+    so we never miss an affordable date beyond the 90-day baseline window.
+    """
+    # Determine how far ahead we're willing to look
+    if horizon_end is not None:
+        max_days = (horizon_end - request_date).days
+    else:
+        max_days = 365  # look up to 1 year ahead
+
+    for day_offset in range(max_days + 1):
         pay_date = request_date + timedelta(days=day_offset)
-        days = simulator.simulate(ctx, request_date, patterns, [(pay_date, requested_amount)])
-        if all(d.balance_end >= min_bal for d in days):
+        # Simulate far enough to cover this pay_date plus 30 more days of expenses
+        sim_horizon = max(day_offset + 30, simulator.HORIZON_DAYS)
+        days = simulator.simulate(
+            ctx, request_date, patterns, [(pay_date, requested_amount)],
+            horizon_days=sim_horizon,
+        )
+        check_end = horizon_end if horizon_end is not None else pay_date + timedelta(days=30)
+        if all(
+            d.balance_end >= min_bal
+            for d in days
+            if d.date <= check_end
+        ):
             return pay_date
-    return None  # Not feasible within 90 days
+    return None  # Not feasible within the horizon
 
 
 def _parse_date(date_str: Optional[str]) -> date:
