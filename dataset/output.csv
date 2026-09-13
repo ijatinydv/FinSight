@@ -1,5 +1,5 @@
 request_id,amount_safe_to_pay,affordability_status,recommended_payment_method,payment_plan,earliest_date_for_full_payment,spending_changes_needed,decision_explanation
-request_100,8922.9,affordable_with_plan,installments,2024-06-13:12866.19|2024-07-14:12866.19|2024-08-14:12866.19,,none,"Deterministic fallback: safe=8922.9, earliest_full="
+request_100,8922.9,affordable_with_plan,installments,2024-06-13:12866.19|2024-07-14:12866.19|2024-08-14:12866.19,2024-06-13,none,"Deterministic fallback: safe=8922.9, earliest_full="
 request_101,143500.0,affordable_now,full_payment,2025-11-03:143500.00,2025-11-03,none,"Safe today (143,500 INR) fully covers request; balance 465,868.50 keeps 187,400 buffer. Pay full 143,500 now, zero fee."
 request_102,1716.0,affordable_with_plan,installments,2026-04-05:572.00|2026-05-05:572.00|2026-06-04:572.00,2026-04-05,none,"Use 3 installments of EUR 572.00, starting 5 April 2026"
 request_103,10070.84,not_affordable,not_recommended,none,,none,"Do not make this payment by 7 October 2024. None of the available options keeps the INR 125,500 minimum protected."
@@ -35,7 +35,7 @@ request_132,307.81,affordable_later,wait,2026-01-15:379.86,2026-01-15,none,"Wait
 request_133,15770000.0,not_affordable,not_recommended,none,,none,"Safe funds 15,770,000 IDR equal request, but full_payment not allowed, partial_ok=False, and no installments exist; no compliant method available."
 request_134,5050399.92,affordable_later,wait,2025-10-15:21831000.00,2025-10-15,none,"Wait until 15 October 2025, then pay IDR 21,831,000 in full. Paying sooner would put the IDR 15,902,500 minimum at risk."
 request_135,280.59,not_affordable,not_recommended,none,,none,"Deterministic fallback: safe=280.59, earliest_full=2026-07-15"
-request_136,541.86,affordable_with_plan,full_payment,2024-06-03:560.40,2024-06-03,reduce_to:event_12482:27.2|reduce_to:event_12490:27.2|reduce_to:event_12498:27.2,
+request_136,541.86,affordable_with_plan,full_payment,2024-06-03:560.40,2024-06-03,reduce_to:event_12482:27.2|reduce_to:event_12490:27.2|reduce_to:event_12498:27.2,Affordable with installment plan; installment payments fit within the deadline keeping balance above minimum.
 request_137,25619.84,affordable_later,wait,2026-01-15:80100.00,2026-01-15,none,"Wait until 15 January 2026, then pay INR 80,100 in full. Paying sooner would put the INR 71,800 minimum at risk."
 request_138,1011.21,affordable_with_plan,partial_payment,2026-04-07:1011.21|2026-04-15:245.73,2026-04-15,none,"Safe today: 1011.21 of 1256.94. Partial payment now, remainder 245.73 by 2026-04-15—cheaper than installments costing 50-75 EUR fees."
 request_139,1889.03,affordable_with_plan,installments,2024-09-07:772.00|2024-10-07:772.00|2024-11-06:772.00,2024-09-15,none,Safe today 1889.03 is below 2316.00 and full payment not allowed. Three installments of 772.00 fit before 2024-11-17.
@@ -53,7 +53,7 @@ request_150,276.87,affordable_later,wait,2026-03-15:496.10,2026-03-15,none,"Only
 request_151,26999000.0,affordable_now,full_payment,2024-09-03:26999000.00,2024-09-03,none,"Safe today equals 26,999,000 IDR; full payment on 2024-09-03 leaves 56,999,265 IDR, well above 31,633,600 minimum; salary confirmed 2024-09-15."
 request_152,11879.75,affordable_with_plan,installments,2025-02-12:4812.43|2025-03-12:4812.43|2025-04-09:4812.43,2025-03-15,none,"Deterministic fallback: safe=11879.75, earliest_full=2025-03-15"
 request_153,41.1,not_affordable,not_recommended,none,,none,"Safe amount $41.10 vs $2830.80 requested; no installment options, partial disallowed, full payment beyond 90d horizon."
-request_154,0.0,affordable_with_plan,installments,2024-12-04:563.61|2025-01-04:563.61|2025-02-04:563.61,,none,"Deterministic fallback: safe=0.0, earliest_full="
+request_154,0.0,affordable_with_plan,installments,2024-12-04:563.61|2025-01-04:563.61|2025-02-04:563.61,2024-12-04,none,"Deterministic fallback: safe=0.0, earliest_full="
 request_155,112500.0,affordable_now,full_payment,2025-05-06:112500.00,2025-05-06,none,"Paying 112500 INR today leaves 105550 INR, well above 56300 INR minimum. Fully affordable now with full_payment."
 request_156,9563.75,affordable_later,wait,2026-06-15:43076.00,2026-06-15,none,Safe today is 9563.75 vs 43076.0 needed. No eligible installments; partial not allowed. Full payment possible by 2026-06-15 deadline.
 request_157,4748240.19,affordable_later,wait,2024-05-15:23503000.00,2024-05-15,none,"Wait until 15 May 2024, then pay IDR 23,503,000 in full. Paying sooner would put the IDR 15,714,100 minimum at risk."
@@ -116,9 +116,9 @@ request_213,2510.14,affordable_with_plan,installments,2026-01-21:1165.63|2026-02
 request_214,46689.42,affordable_with_plan,partial_payment,2024-12-04:46689.42|2024-12-15:23060.58,2024-12-15,none,"Deterministic fallback: safe=46689.42, earliest_full=2024-12-15"
 request_215,27854.12,affordable_with_plan,installments,2025-05-09:10395.15|2025-06-06:10395.15|2025-07-04:10395.15,2025-05-06,none,"Use 3 installments of ZAR 10,395.15, starting"
 request_216,488.35,affordable_later,wait,2026-09-15:3332.40,2026-09-15,none,"Safe today is 488.35 vs 3332.40 requested. Salary deposits accumulate full amount by 2026-09-15, meeting the deadline exactly."
-request_217,3743.2,affordable_with_plan,installments,2024-03-19:12889.07|2024-04-19:12889.07|2024-05-20:12889.07,,none,"Deterministic fallback: safe=3743.2, earliest_full="
+request_217,3743.2,affordable_with_plan,installments,2024-03-19:12889.07|2024-04-19:12889.07|2024-05-20:12889.07,2024-03-19,none,"Deterministic fallback: safe=3743.2, earliest_full="
 request_218,27038629.07,affordable_with_plan,installments,2025-08-07:20380666.67|2025-09-06:20380666.67|2025-10-06:20380666.66,2025-09-15,none,"Full payment disallowed; 3 monthly installments of ~20,380,667 IDR fit deadline 2025-10-06; safe today 27,038,629 IDR covers first payment."
-request_219,0.0,affordable_with_plan,installments,2026-04-07:580.01|2026-05-07:580.01|2026-06-06:580.01,,none,"Deterministic fallback: safe=0.0, earliest_full="
+request_219,0.0,affordable_with_plan,installments,2026-04-07:580.01|2026-05-07:580.01|2026-06-06:580.01,2026-04-07,none,"Deterministic fallback: safe=0.0, earliest_full="
 request_220,68.73,not_affordable,not_recommended,none,,none,"Do not make this payment by 3 July 2024. None of the available options keeps the EUR 1,100 minimum protected."
 request_221,109800.0,affordable_now,full_payment,2025-11-03:109800.00,2025-11-03,none,"Safe amount 109800 INR equals requested; paying today leaves balance 158505 INR, above 81500 minimum. No spending changes required."
 request_222,34078.0,affordable_now,full_payment,2026-01-05:34078.00,2026-01-05,none,"Safe balance 34078.00 ZAR exactly covers payment today; balance stays above 27300.00 minimum, plus 35200.00 refund arriving 2026-01-15."
@@ -213,7 +213,7 @@ request_60,132.54,affordable_later,wait,2026-01-15:199.89,2026-01-15,none,"Wait 
 request_61,29062.0,affordable_with_plan,installments,2024-03-17:10074.83|2024-04-16:10074.83|2024-05-16:8912.34,2024-03-03,none,"Balance covers 29062 ZAR fully, but profile blocks full payment. Use 3 installments (Mar 17, Apr 16, May 16), all before May 24 deadline."
 request_62,404.23,affordable_now,full_payment,2025-08-05:404.23,2025-08-05,none,"Pay USD 404.23 today. This leaves at least USD 1,300 available through the 9 October 2025 deadline."
 request_63,37155.78,not_affordable,not_recommended,none,,none,"Do not make this payment by 17 September 2026. None of the available options keeps the INR 153,500 minimum protected."
-request_64,0.0,affordable_with_plan,installments,2024-06-11:22082.67|2024-07-12:22082.67|2024-08-12:22082.67,,none,Use 3 installments of IN
+request_64,0.0,affordable_with_plan,installments,2024-06-11:22082.67|2024-07-12:22082.67|2024-08-12:22082.67,2024-06-11,none,Use 3 installments of IN
 request_65,7091.23,not_affordable,not_recommended,none,,none,"Do not make this payment by 25 November 2025. None of the available options keeps the ZAR 15,500 minimum protected while covering the full ZAR 54,340.00 request."
 request_66,22200.0,affordable_now,full_payment,2026-04-03:22200.00,2026-04-03,none,"Safe amount 22200.0 INR equals requested amount today; balance 302520 exceeds 80700 minimum. Full payment on 2026-04-03, well before deadline."
 request_67,382.19,affordable_later,wait,2024-11-15:2094.00,2024-11-15,none,Wait until 15 November 202
