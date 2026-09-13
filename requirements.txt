@@ -1,4 +1,4 @@
-﻿pandas
+pandas
 pydantic
 pydantic-settings
 python-dotenv

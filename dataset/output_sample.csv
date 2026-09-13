@@ -1,26 +1,26 @@
 request_id,amount_safe_to_pay,affordability_status,recommended_payment_method,payment_plan,earliest_date_for_full_payment,spending_changes_needed,decision_explanation
-request_01,25256.0,affordable_now,full_payment,2024-03-03:25256.00,2024-03-03,none,"Pay ZAR 25,256 today. This leaves at least ZAR 18,000 available over the next 90 days."
-request_02,17991313.61,affordable_with_plan,installments,2025-08-08:15339333.34|2025-09-07:15339333.33|2025-10-07:15339333.33,2025-09-15,none,"Safe funds 17,991,313.61 IDR are below 46,018,000 requested; use eligible 3-installment plan fitting 2025-10-10 deadline."
-request_03,454799.71,not_affordable,not_recommended,none,,none,"Do not make this payment by 15 November 2019. None of the available options keeps the IDR 2,668,700 minimum protected, and the full IDR 5,491,000 cannot be safely paid before the deadline."
-request_04,10458312.58,affordable_later,wait,2024-06-15:12693000.00,2024-06-15,none,"Wait until 15 June 2024, then pay IDR 12,693,000 in full. Paying sooner would put the IDR 30,686,600 minimum at risk."
-request_05,15488.0,affordable_now,full_payment,2025-11-06:15488.00,2025-11-06,none,Safe amount 15488.00 ZAR matches requested 15488.00; balance 46475.10 stays above 13100.00 minimum after payment. Pay now.
-request_06,620.4,affordable_now,full_payment,2026-01-03:620.40,2026-01-03,none,"Safe balance 620.40 exactly covers request 620.40; pay in full today, buffer stays above 800 minimum despite reduced salary."
-request_07,86219.32,affordable_with_plan,installments,2024-09-12:65800.00|2024-10-12:65800.00|2024-11-12:65800.00,2024-10-23,none,Full payment disallowed; safe today 86219.32 < 197400. Installment plan 3x65800 INR (2024-09-12 to 2024-11-12) fits deadline; total adjusted to 197400 per correction.
-request_08,383.38,affordable_later,wait,2025-04-15:996.60,2025-04-15,none,"Deterministic fallback: safe=383.38, earliest_full=2025-04-15"
-request_09,166.61,affordable_now,full_payment,2026-07-04:166.61,2026-07-04,none,Safe amount 166.61 EUR matches request; balance 2231.10 EUR stays well above 600 EUR minimum. Pay fully today.
+request_01,25256.0,affordable_now,full_payment,2024-03-03:25256.00,2024-03-03,none,"Pay ZAR 25,256 today, well ahead of the 20 March 2024 deadline. This leaves at least ZAR 18,000 available over"
+request_02,17991313.61,affordable_with_plan,installments,2025-08-08:15339333.33|2025-09-07:15339333.33|2025-10-07:15339333.34,2025-09-15,none,
+request_03,454799.71,not_affordable,not_recommended,none,,none,
+request_04,10458312.58,affordable_later,wait,2024-06-15:12693000.00,2024-06-15,none,"Wait until 15 June 2024, then pay IDR 12,693,000 in full. Paying sooner would put the IDR 30,686,600 minimum at risk, and 15 June still falls within the 19 June deadline."
+request_05,15488.0,affordable_now,full_payment,2025-11-06:15488.00,2025-11-06,none,
+request_06,620.4,affordable_now,full_payment,2026-01-03:620.40,2026-01-03,none,
+request_07,86219.32,affordable_with_plan,installments,2024-09-12:65800.00|2024-10-12:65800.00|2024-11-11:65800.00,2024-10-23,none,
+request_08,383.38,affordable_later,wait,2025-04-15:996.60,2025-04-15,none,
+request_09,166.61,affordable_now,full_payment,2026-07-04:166.61,2026-07-04,none,
 request_10,0.0,not_affordable,not_recommended,none,,none,"Do not make this INR 266,700.00 purchase by 10 February 2025. None of the available options keeps the INR 225,400.00 minimum protected."
-request_11,12224666.47,affordable_later,wait,2025-05-15:13110000.00,2025-05-15,none,"Safe today IDR 12,224,666 vs 13,110,000 needed (shortfall 885,334). Salary unlocks full payment 2025-05-15, before June 12 deadline."
-request_12,62365.18,affordable_with_plan,installments,2026-04-19:22590.19|2026-05-20:22590.19|2026-06-20:22590.19,2026-04-05,none,"Use 3 installments of ZAR 22,590.19, starting 19 April 2026. This leaves at least ZAR 43"
-request_13,549.62,affordable_later,wait,2024-05-15:941.60,2024-05-15,none,"Deterministic fallback: safe=549.62, earliest_full=2024-05-15"
-request_14,612.68,not_affordable,not_recommended,none,,none,"Do not make this EUR 5,414.20 payment by 4 October 2025. None of the available options keeps the EUR 2,200 minimum protected."
-request_15,65.61,not_affordable,not_recommended,none,,none,"Do not make this EUR 3,685.00 investment by 1 February 2026. None of the available options keeps the EUR 1,200 minimum protected."
-request_16,122500.0,affordable_now,full_payment,2023-08-12:122500.00,2023-08-12,none,Safe amount 122500 equals request; balance 362370 stays above 122400 minimum after payment. Pay fully today.
-request_17,240769.43,affordable_with_plan,installments,2026-03-01:91533.34|2026-03-31:91533.33|2026-04-30:91533.33,2026-04-15,none,"Safe today 240,769.43 < 274,600 requested; only installments allowed. Three payments of ~91,533 end 2026-04-30, before 2026-05-04 deadline."
-request_18,659.88,affordable_later,wait,2026-09-15:3246.10,2026-09-15,none,Safe today only 659.88 of 3246.10; partial not allowed. Salary inflows reach full amount by 2026-09-15 deadline; pay then.
-request_19,39660.0,affordable_with_plan,installments,2024-09-04:19830.00|2024-10-04:19830.00,2024-09-04,none,"Safe today 39660 equals request, but full payment disallowed; 2 installments of 19830 fit deadline, 1586 financing fee applies."
-request_20,17107.27,not_affordable,not_recommended,none,,none,"Do not make this payment by 22 February 2026. Only INR 17,107.27 of the INR 303,700.00 is safe to pay, and no spending changes or payment plan keeps the INR 64,500 minimum protected."
-request_21,1574.4,affordable_now,full_payment,2026-04-03:1574.40,2026-04-03,none,"Full $1574.40 payment today leaves $2336.95, above $1800 minimum. No fee, deadline met."
-request_22,476.72,affordable_with_plan,installments,2024-12-08:243.83|2025-01-08:243.83|2025-02-08:243.84,2025-01-15,none,Use
-request_23,10202.46,affordable_later,wait,2025-07-15:38016.00,2025-07-15,none,"Wait until 15 July 2025, then pay ZAR 38,016 in full. Paying sooner would put the ZAR 27,000 minimum at risk."
-request_24,16032.9,not_affordable,not_recommended,none,,none,"Do not make this INR 109,600 investment by 8 February 2026. Only INR 16,032.90 can be safely freed, and no available option keeps the INR 51,000 minimum protected."
-request_25,2687320.04,not_affordable,not_recommended,none,,none,Do not make this housing payment of IDR 60
+request_11,12224666.47,affordable_later,wait,2025-05-15:13110000.00,2025-05-15,none,"Wait until 15 May 2025, then pay IDR"
+request_12,62365.18,affordable_with_plan,installments,2026-04-19:22590.19|2026-05-20:22590.19|2026-06-20:22590.19,2026-04-05,none,
+request_13,549.62,affordable_later,wait,2024-05-15:941.60,2024-05-15,none,
+request_14,612.68,not_affordable,not_recommended,none,,none,
+request_15,65.61,not_affordable,not_recommended,none,,none,
+request_16,122500.0,affordable_now,full_payment,2023-08-12:122500.00,2023-08-12,none,
+request_17,240769.43,affordable_with_plan,installments,2026-03-01:91533.33|2026-04-01:91533.33|2026-05-01:91533.34,2026-04-15,none,
+request_18,659.88,affordable_later,wait,2026-09-15:3246.10,2026-09-15,none,
+request_19,39660.0,affordable_with_plan,installments,2024-09-04:19830.00|2024-10-04:19830.00,2024-09-04,none,
+request_20,17107.27,not_affordable,not_recommended,none,,none,"Do not make this INR 303,700.00 payment by 22 February 2026. Only INR 17,107.27 is safely available now, full funds are not reached"
+request_21,1574.4,affordable_now,full_payment,2026-04-03:1574.40,2026-04-03,none,
+request_22,476.72,affordable_with_plan,installments,2024-12-08:243.83|2025-01-07:243.83|2025-02-06:243.84,2025-01-15,none,
+request_23,10202.46,affordable_later,wait,2025-07-15:38016.00,2025-07-15,none,
+request_24,16032.9,not_affordable,not_recommended,none,,none,
+request_25,2687320.04,not_affordable,not_recommended,none,,none,
